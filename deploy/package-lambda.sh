@@ -22,7 +22,7 @@ cp -r "$PROJECT_DIR/mcp-server/tools" "$PACKAGE_DIR/"
 cp -r "$PROJECT_DIR/mcp-server/auth" "$PACKAGE_DIR/"
 
 # Install deps for Lambda (Amazon Linux)
-pip3 install --target "$PACKAGE_DIR" \
+pip3.11 install --target "$PACKAGE_DIR" \
     --platform manylinux2014_x86_64 \
     --implementation cp \
     --python-version 3.11 \

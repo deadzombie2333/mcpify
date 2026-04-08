@@ -130,13 +130,14 @@ class S3Embedder:
                 f.write(raw_bytes)
 
             # Convert DOCX → PDF via LibreOffice headless
-            subprocess.run(
-                ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", tmpdir, docx_path],
+            result = subprocess.run(
+                ["libreoffice", "--headless", "--norestore", "--convert-to", "pdf", "--outdir", tmpdir, docx_path],
                 capture_output=True, timeout=120,
+                env={**os.environ, "HOME": tmpdir},
             )
             pdf_path = os.path.join(tmpdir, "input.pdf")
             if not os.path.exists(pdf_path):
-                print(f"    ⚠️  LibreOffice conversion failed for {key}, trying direct text extraction")
+                print(f"    ⚠️  LibreOffice conversion failed for {key}: {result.stderr.decode()}")
                 return self._docx_fallback_text(raw_bytes)
 
             images = convert_from_path(pdf_path, dpi=200)

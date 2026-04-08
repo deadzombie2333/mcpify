@@ -217,7 +217,7 @@ def _update_gateway_allowed_clients(config, client_id, add=True):
     region = config["region"]
     project = config["project_name"]
     try:
-        ac = boto3.client("bedrock-agentcore", region_name=region)
+        ac = boto3.client("bedrock-agentcore-control", region_name=region)
         gateways = ac.list_gateways()["items"]
         gw = next((g for g in gateways if g["name"] == f"{project}-mcpify"), None)
         if not gw:

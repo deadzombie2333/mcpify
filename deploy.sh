@@ -163,17 +163,65 @@ echo ""
 
 # ─── Step 8: Add Gateway Target ───
 echo "🎯 Step 8: Adding Lambda as Gateway target..."
-GATEWAY_ARN="arn:aws:bedrock-agentcore:${REGION}:$(aws sts get-caller-identity --query Account --output text):gateway/${GATEWAY_ID}"
 
-# Get the AgentCore role ARN from the gateway stack
-AC_ROLE_ARN=$(aws iam get-role --role-name "${PROJECT}-mcpify-gateway-role" --query 'Role.Arn' --output text 2>/dev/null || true)
+TARGET_JSON=$(mktemp)
+cat > "$TARGET_JSON" <<EOF
+{
+  "gatewayIdentifier": "$GATEWAY_ID",
+  "name": "${PROJECT}-lambda",
+  "targetConfiguration": {
+    "mcp": {
+      "lambda": {
+        "lambdaArn": "$LAMBDA_ARN",
+        "toolSchema": {
+          "inlinePayload": [
+            {
+              "name": "document_search",
+              "description": "Semantic search across your knowledge base. Finds relevant document sections using vector similarity.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "query": {"type": "string", "description": "Natural language search query"},
+                  "top_k": {"type": "integer", "description": "Number of results to return"}
+                },
+                "required": ["query"]
+              }
+            },
+            {
+              "name": "document_assistant",
+              "description": "Ask a question and get an answer based on your accessible documents.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "question": {"type": "string", "description": "Your question in natural language"}
+                },
+                "required": ["question"]
+              }
+            },
+            {
+              "name": "list_documents",
+              "description": "Browse documents you have access to. Optionally filter by folder.",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "folder": {"type": "string", "description": "Optional folder name to filter"}
+                },
+                "required": []
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "credentialProviderConfigurations": [{"credentialProviderType": "GATEWAY_IAM_ROLE"}]
+}
+EOF
 
-aws bedrock-agentcore create-gateway-target \
-    --gateway-identifier "$GATEWAY_ID" \
-    --name "${PROJECT}-lambda" \
-    --target-configuration "lambdaTarget={lambdaArn=$LAMBDA_ARN}" \
-    --credential-provider-configurations "[{\"credentialProviderType\":\"GATEWAY_IAM_ROLE\"}]" \
+aws bedrock-agentcore-control create-gateway-target \
+    --cli-input-json "file://$TARGET_JSON" \
     --region "$REGION" 2>/dev/null || echo "  Target may already exist"
+rm -f "$TARGET_JSON"
 echo "  ✅ Gateway target configured"
 echo ""
 
