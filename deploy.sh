@@ -107,7 +107,7 @@ echo "🔍 Step 5: OpenSearch ($OS_STACK)"
 
 # Get EC2 instance role ARN for embedder access
 EC2_ROLE_ARN=""
-EC2_ROLE_ARN=$(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null | sed 's|:sts:.*:assumed-role/|:iam::*:role/|;s|/.*||' || true)
+EC2_ROLE_ARN=$(aws sts get-caller-identity --query 'Arn' --output text 2>/dev/null | sed 's|:sts:|:iam:|;s|:assumed-role/|:role/|;s|/[^/]*$||' || true)
 # If running as an EC2 instance role, extract the role ARN
 if echo "$EC2_ROLE_ARN" | grep -q "role/"; then
     echo "  EC2 embedder role: $EC2_ROLE_ARN"
@@ -160,8 +160,6 @@ echo ""
 # ─── Step 8: Add Gateway Target ───
 echo "🎯 Step 8: Adding Lambda as Gateway target..."
 GATEWAY_ARN="arn:aws:bedrock-agentcore:${REGION}:$(aws sts get-caller-identity --query Account --output text):gateway/${GATEWAY_ID}"
-GW_ROLE_ARN=$(aws cloudformation describe-stacks --stack-name "$GW_STACK" --region "$REGION" \
-    --query 'Stacks[0].Outputs[?OutputKey==`GatewayUrl`].OutputValue' --output text 2>/dev/null || true)
 
 # Get the AgentCore role ARN from the gateway stack
 AC_ROLE_ARN=$(aws iam get-role --role-name "${PROJECT}-mcpify-gateway-role" --query 'Role.Arn' --output text 2>/dev/null || true)

@@ -90,6 +90,7 @@ def build_opensearch_filter(permissions: Dict[str, Any]) -> Optional[Dict]:
     """
     Build an OpenSearch bool filter from permissions.
     Returns None if wildcard access (no filter needed).
+    Uses file_path prefix matching for folder rules.
     """
     if not permissions:
         return {"bool": {"must_not": [{"match_all": {}}]}}  # deny all
@@ -102,22 +103,24 @@ def build_opensearch_filter(permissions: Dict[str, Any]) -> Optional[Dict]:
     # Wildcard = no allow filter needed
     is_wildcard = "*" in folders
 
-    # Build allow clause
+    # Build allow clause using file_path prefix for folders
     should = []
     if not is_wildcard:
-        if folders:
-            should.append({"terms": {"category": folders}})
+        for folder in folders:
+            prefix = folder if folder.endswith("/") else folder + "/"
+            should.append({"prefix": {"file_path": prefix}})
         if files:
             should.append({"terms": {"file_path": files}})
         if not should:
             return {"bool": {"must_not": [{"match_all": {}}]}}  # deny all
 
-    # Build deny clause
+    # Build deny clause using file_path prefix for folders
     must_not = []
     if deny.get("files"):
         must_not.append({"terms": {"file_path": deny["files"]}})
-    if deny.get("folders"):
-        must_not.append({"terms": {"category": deny["folders"]}})
+    for folder in deny.get("folders", []):
+        prefix = folder if folder.endswith("/") else folder + "/"
+        must_not.append({"prefix": {"file_path": prefix}})
 
     if is_wildcard:
         if must_not:

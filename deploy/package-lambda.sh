@@ -22,7 +22,7 @@ cp -r "$PROJECT_DIR/mcp-server/tools" "$PACKAGE_DIR/"
 cp -r "$PROJECT_DIR/mcp-server/auth" "$PACKAGE_DIR/"
 
 # Install deps for Lambda (Amazon Linux)
-pip install --target "$PACKAGE_DIR" \
+pip3 install --target "$PACKAGE_DIR" \
     --platform manylinux2014_x86_64 \
     --implementation cp \
     --python-version 3.11 \
@@ -39,7 +39,7 @@ PACKAGE_SIZE=$(du -h lambda-deployment.zip | cut -f1)
 echo "Package: lambda-deployment.zip ($PACKAGE_SIZE)"
 
 # Upload
-PACKAGE_BYTES=$(stat -f%z lambda-deployment.zip 2>/dev/null || stat -c%s lambda-deployment.zip 2>/dev/null)
+PACKAGE_BYTES=$(stat -c%s lambda-deployment.zip 2>/dev/null || stat -f%z lambda-deployment.zip 2>/dev/null)
 if [ "$PACKAGE_BYTES" -gt 52428800 ]; then
     ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
     BUCKET="${PROJECT_NAME}-mcpify-deploy-${ACCOUNT_ID}"
