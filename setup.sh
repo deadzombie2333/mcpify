@@ -2,6 +2,7 @@
 set -e
 
 # mcpify — EC2 one-time setup
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "🔧 mcpify setup"
 
 # Python 3
@@ -10,6 +11,14 @@ if ! command -v python3 &>/dev/null; then
     sudo dnf install -y python3 python3-pip 2>/dev/null || \
     sudo yum install -y python3 python3-pip 2>/dev/null || \
     sudo apt-get install -y python3 python3-pip 2>/dev/null
+fi
+
+# pip3
+if ! command -v pip3 &>/dev/null; then
+    echo "Installing pip3..."
+    sudo dnf install -y python3-pip 2>/dev/null || \
+    sudo yum install -y python3-pip 2>/dev/null || \
+    sudo apt-get install -y python3-pip 2>/dev/null
 fi
 
 # jq
@@ -42,9 +51,21 @@ fi
 
 if ! command -v libreoffice &>/dev/null; then
     echo "Installing LibreOffice headless (DOCX conversion)..."
-    sudo dnf install -y libreoffice-core libreoffice-writer 2>/dev/null || \
-    sudo yum install -y libreoffice-core libreoffice-writer 2>/dev/null || \
-    sudo apt-get install -y libreoffice 2>/dev/null
+    if sudo dnf install -y libreoffice-core libreoffice-writer 2>/dev/null; then
+        true
+    elif sudo apt-get install -y libreoffice 2>/dev/null; then
+        true
+    else
+        echo "  Package not in repos, installing from RPMs..."
+        LO_VERSION="25.8.6"
+        cd /tmp
+        wget -q "https://download.documentfoundation.org/libreoffice/stable/${LO_VERSION}/rpm/x86_64/LibreOffice_${LO_VERSION}_Linux_x86-64_rpm.tar.gz"
+        tar -xzf "LibreOffice_${LO_VERSION}_Linux_x86-64_rpm.tar.gz"
+        cd LibreOffice_${LO_VERSION}*_rpm/RPMS/
+        sudo rpm -ivh *.rpm
+        cd "$SCRIPT_DIR"
+        rm -rf /tmp/LibreOffice_${LO_VERSION}*
+    fi
 fi
 
 # Make scripts executable

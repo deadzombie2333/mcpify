@@ -48,6 +48,36 @@ Lambda (VPC, Python 3.11)
   - `amazon.titan-embed-text-v2:0` (embeddings)
   - `us.amazon.nova-2-lite-v1:0` (Q&A and PDF/DOCX OCR, or your chosen model)
 
+### EC2 IAM Role
+
+Attach an IAM role to your EC2 instance with the following managed policies:
+
+| Policy | Purpose |
+|--------|---------|
+| `AWSCloudFormationFullAccess` | Deploy CloudFormation stacks |
+| `AmazonVPCFullAccess` | Create VPC, subnets, NAT gateways, VPC endpoints |
+| `AWSLambda_FullAccess` | Create and manage Lambda functions |
+| `AmazonCognitoPowerUser` | Create user pools, app clients, domains |
+| `AmazonDynamoDBFullAccess` | Create and manage permissions table |
+| `AmazonS3ReadOnlyAccess` | Read documents from S3 |
+| `AmazonBedrockFullAccess` | Invoke models, manage AgentCore gateways |
+| `IAMFullAccess` | Create IAM roles for Lambda and AgentCore |
+
+Plus a custom inline policy for OpenSearch Serverless:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "aoss:*",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
 ## Quick Start
 
 ### 1. Clone and setup

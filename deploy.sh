@@ -46,7 +46,8 @@ aws cloudformation deploy \
         AvailabilityZone2="${REGION}b" \
     --capabilities CAPABILITY_NAMED_IAM \
     --region "$REGION" \
-    --no-fail-on-empty-changeset
+    --no-fail-on-empty-changeset \
+    --disable-rollback
 echo "  ✅ VPC deployed"
 echo ""
 
@@ -62,7 +63,8 @@ aws cloudformation deploy \
         TokenExpiryMinutes="$TOKEN_EXPIRY" \
     --capabilities CAPABILITY_NAMED_IAM \
     --region "$REGION" \
-    --no-fail-on-empty-changeset
+    --no-fail-on-empty-changeset \
+    --disable-rollback
 
 # Extract outputs
 GW_OUTPUTS=$(aws cloudformation describe-stacks --stack-name "$GW_STACK" --region "$REGION" --query 'Stacks[0].Outputs')
@@ -93,7 +95,8 @@ aws cloudformation deploy \
         LambdaTimeout="$LAMBDA_TIMEOUT" \
     --capabilities CAPABILITY_NAMED_IAM \
     --region "$REGION" \
-    --no-fail-on-empty-changeset
+    --no-fail-on-empty-changeset \
+    --disable-rollback
 
 LAMBDA_OUTPUTS=$(aws cloudformation describe-stacks --stack-name "$LAMBDA_STACK" --region "$REGION" --query 'Stacks[0].Outputs')
 LAMBDA_ARN=$(echo "$LAMBDA_OUTPUTS" | jq -r '.[] | select(.OutputKey=="LambdaArn") | .OutputValue')
@@ -128,7 +131,8 @@ aws cloudformation deploy \
     --parameter-overrides $OS_PARAMS \
     --capabilities CAPABILITY_NAMED_IAM \
     --region "$REGION" \
-    --no-fail-on-empty-changeset
+    --no-fail-on-empty-changeset \
+    --disable-rollback
 
 OS_OUTPUTS=$(aws cloudformation describe-stacks --stack-name "$OS_STACK" --region "$REGION" --query 'Stacks[0].Outputs')
 OS_ENDPOINT=$(echo "$OS_OUTPUTS" | jq -r '.[] | select(.OutputKey=="Endpoint") | .OutputValue')
@@ -146,7 +150,7 @@ EMBED_DIMS=$(jq -r '.embedding_dimensions // 1024' "$CONFIG")
 
 aws lambda update-function-configuration \
     --function-name "$FUNCTION_NAME" \
-    --environment "Variables={REGION=$REGION,PERMISSIONS_TABLE=$PERMISSIONS_TABLE,DOCS_BUCKET=$BUCKET,DOCS_PREFIX=$S3_PREFIX,OPENSEARCH_ENDPOINT=$OS_HOST,OPENSEARCH_INDEX=${PROJECT}-docs,BEDROCK_MODEL=$BEDROCK_MODEL,EMBEDDING_MODEL=$EMBED_MODEL,EMBEDDING_DIMS=$EMBED_DIMS,FILE_TYPES=$FILE_TYPES}" \
+    --environment "{\"Variables\":{\"REGION\":\"$REGION\",\"PERMISSIONS_TABLE\":\"$PERMISSIONS_TABLE\",\"DOCS_BUCKET\":\"$BUCKET\",\"DOCS_PREFIX\":\"$S3_PREFIX\",\"OPENSEARCH_ENDPOINT\":\"$OS_HOST\",\"OPENSEARCH_INDEX\":\"${PROJECT}-docs\",\"BEDROCK_MODEL\":\"$BEDROCK_MODEL\",\"EMBEDDING_MODEL\":\"$EMBED_MODEL\",\"EMBEDDING_DIMS\":\"$EMBED_DIMS\",\"FILE_TYPES\":\"$FILE_TYPES\"}}" \
     --region "$REGION" > /dev/null
 aws lambda wait function-updated --function-name "$FUNCTION_NAME" --region "$REGION"
 echo "  ✅ Lambda env updated"
