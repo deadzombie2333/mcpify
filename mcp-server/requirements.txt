@@ -1,0 +1,4 @@
+fastmcp
+boto3
+opensearch-py
+requests-aws4auth

@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'mcpify — Cognito auth, AgentCore Gateway, DynamoDB permissions'
+
+Parameters:
+  ProjectName:
+    Type: String
+  DomainPrefix:
+    Type: String
+  TokenExpiryMinutes:
+    Type: Number
+    Default: 60
+
+Resources:
+  # DynamoDB permissions table (Lambda=read-only, EC2=read-write)
+  PermissionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-mcpify-permissions'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: client_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: client_id
+          KeyType: HASH
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${ProjectName}-mcpify-pool'
+      AutoVerifiedAttributes: [email]
+      UsernameAttributes: [email]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+
+  CognitoDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      Domain: !Ref DomainPrefix
+
+  ResourceServer:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      Identifier: !Sub '${ProjectName}-mcpify'
+      Name: !Sub '${ProjectName}-mcpify-rs'
+      Scopes:
+        - ScopeName: 'mcp:access'
+          ScopeDescription: 'Access MCP tools'
+
+  # Default admin app client (created by CloudFormation, others via CLI)
+  AdminAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: ResourceServer
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      ClientName: !Sub '${ProjectName}-admin'
+      GenerateSecret: true
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
+      AllowedOAuthFlows: [client_credentials]
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - !Sub '${ProjectName}-mcpify/mcp:access'
+      SupportedIdentityProviders: [COGNITO]
+      AccessTokenValidity: !Ref TokenExpiryMinutes
+      TokenValidityUnits:
+        AccessToken: minutes
+
+  AgentCoreRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-mcpify-gateway-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: gateway-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [lambda:InvokeFunction]
+                Resource: '*'
+              - Effect: Allow
+                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+                Resource: ['arn:aws:bedrock:*::foundation-model/*']
+
+  AgentCoreGateway:
+    Type: AWS::BedrockAgentCore::Gateway
+    DependsOn: [AdminAppClient, CognitoDomain]
+    Properties:
+      Name: !Sub '${ProjectName}-mcpify'
+      RoleArn: !GetAtt AgentCoreRole.Arn
+      ProtocolType: MCP
+      AuthorizerType: CUSTOM_JWT
+      AuthorizerConfiguration:
+        CustomJWTAuthorizer:
+          DiscoveryUrl: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}/.well-known/openid-configuration'
+          AllowedClients: [!Ref AdminAppClient]
+      ExceptionLevel: DEBUG
+      ProtocolConfiguration:
+        Mcp:
+          SearchType: SEMANTIC
+
+Outputs:
+  GatewayId:
+    Value: !Ref AgentCoreGateway
+    Export: {Name: !Sub '${AWS::StackName}-GatewayId'}
+  GatewayUrl:
+    Value: !GetAtt AgentCoreGateway.GatewayUrl
+    Export: {Name: !Sub '${AWS::StackName}-GatewayUrl'}
+  UserPoolId:
+    Value: !Ref CognitoUserPool
+    Export: {Name: !Sub '${AWS::StackName}-UserPoolId'}
+  AdminClientId:
+    Value: !Ref AdminAppClient
+    Export: {Name: !Sub '${AWS::StackName}-AdminClientId'}
+  TokenEndpoint:
+    Value: !Sub 'https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/token'
+    Export: {Name: !Sub '${AWS::StackName}-TokenEndpoint'}
+  PermissionsTableName:
+    Value: !Ref PermissionsTable
+    Export: {Name: !Sub '${AWS::StackName}-PermissionsTable'}
+  ResourceServerIdentifier:
+    Value: !Sub '${ProjectName}-mcpify'
+    Export: {Name: !Sub '${AWS::StackName}-ResourceServerId'}

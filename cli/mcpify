@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""
+mcpify CLI — client management (runs on EC2 control plane only).
+
+Usage:
+  mcpify client create  --name NAME --folders f1,f2 [--files file1,file2]
+  mcpify client grant   --name NAME [--folders f1] [--files file1]
+  mcpify client deny    --name NAME [--folders f1] [--files file1]
+  mcpify client revoke  --name NAME
+  mcpify client list
+  mcpify client connect --name NAME
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+import boto3
+
+
+def load_config():
+    config_path = Path(__file__).resolve().parent.parent / "config.json"
+    with open(config_path) as f:
+        return json.load(f)
+
+
+def get_clients(config):
+    """Helper to get boto3 clients."""
+    region = config["region"]
+    project = config["project_name"]
+    table_name = f"{project}-mcpify-permissions"
+    pool_name = f"{project}-mcpify-pool"
+
+    cognito = boto3.client("cognito-idp", region_name=region)
+    dynamodb = boto3.resource("dynamodb", region_name=region)
+    table = dynamodb.Table(table_name)
+
+    # Find user pool ID
+    pools = cognito.list_user_pools(MaxResults=60)["UserPools"]
+    pool_id = next((p["Id"] for p in pools if p["Name"] == pool_name), None)
+    if not pool_id:
+        print(f"❌ User pool '{pool_name}' not found")
+        sys.exit(1)
+
+    return cognito, table, pool_id, region, project
+
+
+def cmd_create(args, config):
+    cognito, table, pool_id, region, project = get_clients(config)
+    rs_id = f"{project}-mcpify"
+    scope = f"{rs_id}/mcp:access"
+
+    # Create Cognito app client
+    resp = cognito.create_user_pool_client(
+        UserPoolId=pool_id,
+        ClientName=args.name,
+        GenerateSecret=True,
+        ExplicitAuthFlows=["ALLOW_REFRESH_TOKEN_AUTH"],
+        AllowedOAuthFlows=["client_credentials"],
+        AllowedOAuthFlowsUserPoolClient=True,
+        AllowedOAuthScopes=[scope],
+        SupportedIdentityProviders=["COGNITO"],
+        AccessTokenValidity=config.get("token_expiry_minutes", 60),
+        TokenValidityUnits={"AccessToken": "minutes"},
+    )
+    client_id = resp["UserPoolClient"]["ClientId"]
+    client_secret = resp["UserPoolClient"]["ClientSecret"]
+
+    # Update gateway AllowedClients
+    _update_gateway_allowed_clients(config, client_id, add=True)
+
+    # Write permissions to DynamoDB
+    folders = [f.strip() for f in args.folders.split(",")] if args.folders else []
+    files = [f.strip() for f in args.files.split(",")] if args.files else []
+
+    table.put_item(Item={
+        "client_id": client_id,
+        "name": args.name,
+        "access_rules": {"folders": folders, "files": files},
+        "deny_rules": {"folders": [], "files": []},
+    })
+
+    print(f"✅ Client created: {args.name}")
+    print(f"   Client ID:     {client_id}")
+    print(f"   Client Secret: {client_secret}")
+    print(f"   Folders:       {folders}")
+    print(f"   Files:         {files}")
+
+
+def cmd_grant(args, config):
+    _, table, _, _, _ = get_clients(config)
+    client_id = _resolve_client_id(table, args.name)
+    item = table.get_item(Key={"client_id": client_id})["Item"]
+
+    access = item.get("access_rules", {"folders": [], "files": []})
+    if args.folders:
+        for f in args.folders.split(","):
+            f = f.strip()
+            if f not in access["folders"]:
+                access["folders"].append(f)
+    if args.files:
+        for f in args.files.split(","):
+            f = f.strip()
+            if f not in access["files"]:
+                access["files"].append(f)
+
+    table.update_item(
+        Key={"client_id": client_id},
+        UpdateExpression="SET access_rules = :a",
+        ExpressionAttributeValues={":a": access},
+    )
+    print(f"✅ Granted access to {args.name}: folders={access['folders']}, files={access['files']}")
+
+
+def cmd_deny(args, config):
+    _, table, _, _, _ = get_clients(config)
+    client_id = _resolve_client_id(table, args.name)
+    item = table.get_item(Key={"client_id": client_id})["Item"]
+
+    deny = item.get("deny_rules", {"folders": [], "files": []})
+    if args.folders:
+        for f in args.folders.split(","):
+            f = f.strip()
+            if f not in deny["folders"]:
+                deny["folders"].append(f)
+    if args.files:
+        for f in args.files.split(","):
+            f = f.strip()
+            if f not in deny["files"]:
+                deny["files"].append(f)
+
+    table.update_item(
+        Key={"client_id": client_id},
+        UpdateExpression="SET deny_rules = :d",
+        ExpressionAttributeValues={":d": deny},
+    )
+    print(f"✅ Denied access for {args.name}: folders={deny['folders']}, files={deny['files']}")
+
+
+def cmd_revoke(args, config):
+    cognito, table, pool_id, _, _ = get_clients(config)
+    client_id = _resolve_client_id(table, args.name)
+
+    cognito.delete_user_pool_client(UserPoolId=pool_id, ClientId=client_id)
+    table.delete_item(Key={"client_id": client_id})
+    _update_gateway_allowed_clients(config, client_id, add=False)
+    print(f"✅ Revoked client: {args.name} ({client_id})")
+
+
+def cmd_list(args, config):
+    _, table, _, _, _ = get_clients(config)
+    items = table.scan()["Items"]
+    if not items:
+        print("No clients configured.")
+        return
+    for item in items:
+        print(f"\n  {item['name']} ({item['client_id']})")
+        access = item.get("access_rules", {})
+        deny = item.get("deny_rules", {})
+        print(f"    Allow folders: {access.get('folders', [])}")
+        print(f"    Allow files:   {access.get('files', [])}")
+        if deny.get("folders") or deny.get("files"):
+            print(f"    Deny folders:  {deny.get('folders', [])}")
+            print(f"    Deny files:    {deny.get('files', [])}")
+
+
+def cmd_connect(args, config):
+    cognito, table, pool_id, region, project = get_clients(config)
+    client_id = _resolve_client_id(table, args.name)
+
+    # Get client secret
+    resp = cognito.describe_user_pool_client(UserPoolId=pool_id, ClientId=client_id)
+    secret = resp["UserPoolClient"].get("ClientSecret", "")
+
+    domain = f"{project}-mcpify-auth"
+    token_url = f"https://{domain}.auth.{region}.amazoncognito.com/oauth2/token"
+    scope = f"{project}-mcpify/mcp:access"
+
+    # Get gateway URL
+    gw_stack = f"{project}-mcpify-gateway"
+    cfn = boto3.client("cloudformation", region_name=region)
+    outputs = cfn.describe_stacks(StackName=gw_stack)["Stacks"][0]["Outputs"]
+    gw_url = next(o["OutputValue"] for o in outputs if o["OutputKey"] == "GatewayUrl")
+
+    print(f"\n📋 MCP config for '{args.name}':")
+    print(json.dumps({
+        "mcpServers": {
+            project: {
+                "url": gw_url,
+                "auth": {
+                    "type": "oauth2",
+                    "token_url": token_url,
+                    "client_id": client_id,
+                    "client_secret": secret,
+                    "scope": scope,
+                }
+            }
+        }
+    }, indent=2))
+
+
+def _resolve_client_id(table, name):
+    """Find client_id by name."""
+    items = table.scan(
+        FilterExpression="#n = :name",
+        ExpressionAttributeNames={"#n": "name"},
+        ExpressionAttributeValues={":name": name},
+    )["Items"]
+    if not items:
+        print(f"❌ Client '{name}' not found")
+        sys.exit(1)
+    return items[0]["client_id"]
+
+
+def _update_gateway_allowed_clients(config, client_id, add=True):
+    """Update AgentCore Gateway AllowedClients list."""
+    region = config["region"]
+    project = config["project_name"]
+    try:
+        ac = boto3.client("bedrock-agentcore", region_name=region)
+        gateways = ac.list_gateways()["items"]
+        gw = next((g for g in gateways if g["name"] == f"{project}-mcpify"), None)
+        if not gw:
+            return
+
+        detail = ac.get_gateway(gatewayIdentifier=gw["gatewayId"])
+        allowed = detail.get("authorizerConfiguration", {}).get("customJWTAuthorizer", {}).get("allowedClients", [])
+
+        if add and client_id not in allowed:
+            allowed.append(client_id)
+        elif not add and client_id in allowed:
+            allowed.remove(client_id)
+        else:
+            return
+
+        ac.update_gateway(
+            gatewayIdentifier=gw["gatewayId"],
+            authorizerConfiguration={
+                "customJWTAuthorizer": {
+                    "allowedClients": allowed,
+                    **{k: v for k, v in detail.get("authorizerConfiguration", {}).get("customJWTAuthorizer", {}).items() if k != "allowedClients"}
+                }
+            },
+        )
+    except Exception as e:
+        print(f"  ⚠️  Could not update gateway AllowedClients: {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="mcpify", description="mcpify client management")
+    sub = parser.add_subparsers(dest="command")
+
+    client_parser = sub.add_parser("client")
+    client_sub = client_parser.add_subparsers(dest="action")
+
+    # create
+    p = client_sub.add_parser("create")
+    p.add_argument("--name", required=True)
+    p.add_argument("--folders", default="")
+    p.add_argument("--files", default="")
+
+    # grant
+    p = client_sub.add_parser("grant")
+    p.add_argument("--name", required=True)
+    p.add_argument("--folders", default="")
+    p.add_argument("--files", default="")
+
+    # deny
+    p = client_sub.add_parser("deny")
+    p.add_argument("--name", required=True)
+    p.add_argument("--folders", default="")
+    p.add_argument("--files", default="")
+
+    # revoke
+    p = client_sub.add_parser("revoke")
+    p.add_argument("--name", required=True)
+
+    # list
+    client_sub.add_parser("list")
+
+    # connect
+    p = client_sub.add_parser("connect")
+    p.add_argument("--name", required=True)
+
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        return
+
+    config = load_config()
+    actions = {
+        "create": cmd_create, "grant": cmd_grant, "deny": cmd_deny,
+        "revoke": cmd_revoke, "list": cmd_list, "connect": cmd_connect,
+    }
+    fn = actions.get(args.action)
+    if fn:
+        fn(args, config)
+    else:
+        client_parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,117 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'mcpify — Lambda function with read-only DynamoDB, read-only S3'
+
+Parameters:
+  ProjectName:
+    Type: String
+  VpcName:
+    Type: String
+  PermissionsTableName:
+    Type: String
+  OpenSearchEndpoint:
+    Type: String
+    Default: ''
+  S3Bucket:
+    Type: String
+    Description: Existing S3 bucket containing documents
+  S3Prefix:
+    Type: String
+    Default: ''
+    Description: Optional prefix/path within the bucket
+  UserPoolId:
+    Type: String
+    Default: ''
+  ClientId:
+    Type: String
+    Default: ''
+  LambdaMemory:
+    Type: Number
+    Default: 2048
+  LambdaTimeout:
+    Type: Number
+    Default: 300
+
+Resources:
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-mcpify-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: lambda-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # DynamoDB: READ ONLY
+              - Effect: Allow
+                Action: [dynamodb:GetItem]
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${PermissionsTableName}'
+              # S3: READ ONLY
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource:
+                  - !Sub 'arn:aws:s3:::${S3Bucket}'
+                  - !Sub 'arn:aws:s3:::${S3Bucket}/*'
+              # Bedrock
+              - Effect: Allow
+                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+                Resource:
+                  - 'arn:aws:bedrock:*::foundation-model/*'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*'
+              # OpenSearch
+              - Effect: Allow
+                Action: [aoss:APIAccessAll]
+                Resource: !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/*'
+              # Logs
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-mcpify-lambda'
+      Runtime: python3.11
+      Handler: lambda_handler.handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: !Ref LambdaTimeout
+      MemorySize: !Ref LambdaMemory
+      Environment:
+        Variables:
+          REGION: !Ref AWS::Region
+          PERMISSIONS_TABLE: !Ref PermissionsTableName
+          DOCS_BUCKET: !Ref S3Bucket
+          DOCS_PREFIX: !Ref S3Prefix
+          OPENSEARCH_ENDPOINT: !Ref OpenSearchEndpoint
+          OPENSEARCH_INDEX: !Sub '${ProjectName}-docs'
+          COGNITO_USER_POOL_ID: !Ref UserPoolId
+          COGNITO_CLIENT_ID: !Ref ClientId
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub '${VpcName}-SecurityGroup-ID'
+        SubnetIds:
+          - Fn::ImportValue: !Sub '${VpcName}-PrivateSubnet1-ID'
+          - Fn::ImportValue: !Sub '${VpcName}-PrivateSubnet2-ID'
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"statusCode": 200, "body": "placeholder"}
+
+Outputs:
+  LambdaArn:
+    Value: !GetAtt LambdaFunction.Arn
+    Export: {Name: !Sub '${AWS::StackName}-LambdaArn'}
+  LambdaName:
+    Value: !Ref LambdaFunction
+    Export: {Name: !Sub '${AWS::StackName}-LambdaName'}
+  LambdaRoleArn:
+    Value: !GetAtt LambdaRole.Arn
+    Export: {Name: !Sub '${AWS::StackName}-LambdaRoleArn'}

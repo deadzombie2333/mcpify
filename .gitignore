@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.zip
+deploy/lambda-package/
+deploy/*-config.json
+deploy/network-config.json
+.DS_Store
+*.egg-info/

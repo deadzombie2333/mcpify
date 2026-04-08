@@ -1,0 +1,15 @@
+{
+  "project_name": "my-docs",
+  "region": "us-west-2",
+  "s3_bucket": "my-company-docs-bucket",
+  "s3_prefix": "",
+  "file_types": ["md", "txt", "json", "pdf", "docx"],
+  "bedrock_model_id": "us.amazon.nova-2-lite-v1:0",
+  "embedding_model_id": "amazon.titan-embed-text-v2:0",
+  "embedding_dimensions": 1024,
+  "chunk_max_size": 3000,
+  "opensearch_top_k": 5,
+  "lambda_memory_mb": 2048,
+  "lambda_timeout_seconds": 300,
+  "token_expiry_minutes": 1440
+}

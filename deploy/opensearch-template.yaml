@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'mcpify — OpenSearch Serverless collection (VPC + public for embedder)'
+
+Parameters:
+  ProjectName:
+    Type: String
+  VpcName:
+    Type: String
+  LambdaRoleArn:
+    Type: String
+  EmbedderRoleArn:
+    Type: String
+    Description: IAM role ARN of the EC2 instance that runs the embedder
+    Default: ''
+
+Conditions:
+  HasEmbedderRole: !Not [!Equals [!Ref EmbedderRoleArn, '']]
+
+Resources:
+  EncryptionPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: !Sub '${ProjectName}-mcpify-enc'
+      Type: encryption
+      Policy: !Sub |
+        {"Rules":[{"ResourceType":"collection","Resource":["collection/${ProjectName}-mcpify"]}],"AWSOwnedKey":true}
+
+  # Network policy: VPC access for Lambda + public access for EC2 embedder
+  NetworkPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: !Sub '${ProjectName}-mcpify-net'
+      Type: network
+      Policy: !Sub
+        - |
+          [
+            {
+              "Rules":[
+                {"ResourceType":"collection","Resource":["collection/${ProjectName}-mcpify"]},
+                {"ResourceType":"dashboard","Resource":["collection/${ProjectName}-mcpify"]}
+              ],
+              "AllowFromPublic":false,
+              "SourceVPCEs":["${VPCEndpointId}"]
+            },
+            {
+              "Rules":[
+                {"ResourceType":"collection","Resource":["collection/${ProjectName}-mcpify"]}
+              ],
+              "AllowFromPublic":true
+            }
+          ]
+        - VPCEndpointId:
+            Fn::ImportValue: !Sub '${VpcName}-OpenSearchServerless-ID'
+
+  # Data access: Lambda (read/search) + EC2 embedder (write/index)
+  DataAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: !Sub '${ProjectName}-mcpify-access'
+      Type: data
+      Policy: !If
+        - HasEmbedderRole
+        - !Sub |
+            [{"Rules":[{"ResourceType":"collection","Resource":["collection/${ProjectName}-mcpify"],"Permission":["aoss:*"]},{"ResourceType":"index","Resource":["index/${ProjectName}-mcpify/*"],"Permission":["aoss:*"]}],"Principal":["${LambdaRoleArn}","${EmbedderRoleArn}"]}]
+        - !Sub |
+            [{"Rules":[{"ResourceType":"collection","Resource":["collection/${ProjectName}-mcpify"],"Permission":["aoss:*"]},{"ResourceType":"index","Resource":["index/${ProjectName}-mcpify/*"],"Permission":["aoss:*"]}],"Principal":["${LambdaRoleArn}"]}]
+
+  Collection:
+    Type: AWS::OpenSearchServerless::Collection
+    DependsOn: [EncryptionPolicy, NetworkPolicy, DataAccessPolicy]
+    Properties:
+      Name: !Sub '${ProjectName}-mcpify'
+      Type: VECTORSEARCH
+      Description: !Sub 'mcpify vector search for ${ProjectName}'
+
+Outputs:
+  Endpoint:
+    Value: !GetAtt Collection.CollectionEndpoint
+    Export: {Name: !Sub '${AWS::StackName}-Endpoint'}
+  CollectionArn:
+    Value: !GetAtt Collection.Arn
+    Export: {Name: !Sub '${AWS::StackName}-Arn'}
